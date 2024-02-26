@@ -129,15 +129,15 @@ fun Turn2Turn(wheelItems: List<WheelItem>) {
 //            button.y -= buttonBottom - bottom
 //        }
 
-//        wheelXOutOfBounds = (wheelDiameter - width) / 2
+    val wheelXOutOfBounds = (wheelDiameter - width) / 2
 //        wheelYOutOfBounds = wheelDiameter - height
 
     var currentAngle by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
-        while(true) {
+        while (true) {
             currentAngle += 2
-            delay(7) // Or better logic for when rotation ends
+            delay(3) // Or better logic for when rotation ends
         }
     }
 
@@ -153,10 +153,19 @@ fun Turn2Turn(wheelItems: List<WheelItem>) {
             modifier =
             Modifier
                 .fillMaxSize(), onDraw = {
-                withTransform({ rotate(currentAngle.toFloat()) }) {
+                withTransform({
+                    rotate(
+                        currentAngle.toFloat(),
+                        Offset(
+                            (wheelDiameter / 2).toFloat() - wheelXOutOfBounds,
+                            (wheelDiameter / 2)
+                                .toFloat()
+                        )
+                    )
+                }) {
                     drawImage(
                         image = wheelDrawable.value,
-//                        topLeft = Offset(-120f, -120f)
+                        topLeft = Offset(-wheelXOutOfBounds.toFloat(), 0f)
                     )
                 }
             }
