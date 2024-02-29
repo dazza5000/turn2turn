@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalTextApi::class)
+
 package com.example.myapplication
 
 import android.content.res.Resources
@@ -5,12 +7,16 @@ import android.graphics.Bitmap
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.util.Log
 import android.util.TypedValue
 import androidx.annotation.ColorInt
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.shrinkOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.Button
@@ -19,28 +25,49 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.graphics.withRotation
-import kotlinx.coroutines.delay
-import java.util.Locale
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.random.Random
 
 @Composable
-fun WheelViewCompose(wheelItems: List<WheelItem>) {
+fun WheelViewCompose(
+    wheelItems: List<WheelItem>,
+    spinConfig: SpinConfig,
+    onSpinComplete: () -> Unit
+) {
 
+    val sliceAngle = remember { 360f / wheelItems.size }
+    val marginLarge = remember {
+        16.dpViewSystem
+    }
+
+    // Set defaults that won't resolve to 0 and crash the draw functions
     var height by remember { mutableIntStateOf(42) }
     var width by remember { mutableIntStateOf(42) }
+
     var buttonWidth by remember {
         mutableIntStateOf(42)
     }
@@ -49,15 +76,17 @@ fun WheelViewCompose(wheelItems: List<WheelItem>) {
         mutableIntStateOf(42)
     }
 
-    val wheelDiameter = (max(width, height) / PERCENT_WHEEL_SHOWN).toInt()
-    val wheelRadius = wheelDiameter / 2
+    val wheelDiameter =
+        remember(width, height) { (max(width, height) / PERCENT_WHEEL_SHOWN).toInt() }
+    val wheelRadius = remember(wheelDiameter) { wheelDiameter / 2 }
 
-//        val minCenterDiameter = (button.measuredWidth + (2f * marginLarge)).toInt()
-    val minCenterDiameter = 80
-    val centerDiameter = max(
-        (wheelDiameter / 3),
-        minCenterDiameter
-    ) // Center should be 1/3 the wheel diameter - need a max?
+    val minCenterDiameter = remember(buttonWidth) { (buttonWidth + (2f * marginLarge)).toInt() }
+    val centerDiameter = remember(wheelDiameter, minCenterDiameter) {
+        max(
+            (wheelDiameter / 3),
+            minCenterDiameter
+        )
+    }// Center should be 1/3 the wheel diameter - need a max?
 
     val wheelDrawable = remember(wheelRadius) {
         derivedStateOf {
@@ -76,77 +105,163 @@ fun WheelViewCompose(wheelItems: List<WheelItem>) {
         derivedStateOf { (wheelDiameter - height).toFloat() }
     }
 
-    val buttonX =  with(LocalDensity.current) { ((width / 2f) - (buttonWidth / 2f)).toInt().toDp() }
-    val buttonY = with(LocalDensity.current) {
-        ((wheelRadius * 1f - (buttonHeight / 2f)) + wheelYOutOfBounds.value).toInt()
-        .toDp()
+    val localDensity = LocalDensity.current
+    val buttonX =
+        remember(width, buttonWidth) {
+            derivedStateOf {
+                with(localDensity) {
+                    ((width / 2f) - (buttonWidth /
+                            2f))
+                        .toInt().toDp()
+                }
+            }
+        }
+    val buttonY =
+        remember(width, buttonWidth) {
+            derivedStateOf {
+                with(localDensity) {
+                    ((wheelRadius * 1f - (buttonHeight / 2f)) + wheelYOutOfBounds.value).toInt()
+                        .toDp()
+                }
+            }
+        }
+
+    var animationRunning by remember {
+        mutableStateOf(false)
     }
 
-    // Ensure the button is fully visible with 16dp bottom margin on the screen. This is
-    // the "best" UX fix for now because placing this custom view within a ScrollView
-    // presented a number of issues on either small or large screens
-//        val buttonBottom = button.y + top + button.measuredHeight + 16.dp
-//        if (buttonBottom > bottom) {
-//            button.y -= buttonBottom - bottom
-//        }
+    var nextVibrationAngle by remember {
+        mutableFloatStateOf(sliceAngle)
 
+    }
+    var job: Job? = null
 
-
-    var currentAngle by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-//            currentAngle += 2
-            delay(3) // Or better logic for when rotation ends
+    val randomAdditional = remember {
+        if (spinConfig.duration != 0L) {
+            Random.nextInt(5, sliceAngle.toInt() - 5)
+        } else {
+            (sliceAngle / 2).toInt()
         }
     }
 
+    val inverseSelectedIndex = remember { (wheelItems.size - 1 - spinConfig.selectedIndex) }
+    val finalAngle = remember { inverseSelectedIndex * sliceAngle + randomAdditional + 3600f }
+    val context = LocalContext.current
+
+
+    var wheelSpun by remember {
+        mutableStateOf(false)
+    }
+
+    val targetValue by remember(animationRunning, spinConfig, finalAngle) {
+        derivedStateOf {
+            if (
+                animationRunning
+                || spinConfig is SpinConfig.SpinComplete
+//                || wheelSpun
+            )
+                finalAngle
+            else
+                0f
+        }
+    }
+
+    LaunchedEffect(targetValue) {
+        Log.d("darran", "targetValue: $targetValue")
+    }
+
+    val angle: Float by animateFloatAsState(
+        targetValue = targetValue,
+        animationSpec = tween(durationMillis = spinConfig.duration.toInt()),
+        label = "AnimateWheel",
+        finishedListener = {
+            wheelSpun = true
+            job?.cancel()
+            onSpinComplete.invoke()
+        }
+    )
+
+    LaunchedEffect(animationRunning) {
+        snapshotFlow { angle }.collectLatest { latestAngle ->
+            if (latestAngle > nextVibrationAngle) {
+                nextVibrationAngle += sliceAngle
+                job?.cancel()
+                job = launch {
+                    VibrationCompat.vibrate(context, EffectType.WHEEL_TICK)
+                }
+                Log.d("WheelViewCompose", "Vibrating! $nextVibrationAngle")
+            }
+        }
+    }
+
+    val wheelOffsetX by remember(wheelDiameter, wheelXOutOfBounds) {
+        derivedStateOf {
+            (wheelDiameter / 2).toFloat() - wheelXOutOfBounds.value
+        }
+    }
+    val wheelOffsetY by remember(wheelDiameter, wheelYOutOfBounds) {
+        derivedStateOf {
+            wheelYOutOfBounds.value +
+                    (wheelDiameter / 2)
+                        .toFloat()
+        }
+    }
+
+
     Box(modifier =
     Modifier
-        .background(Color.DarkGray)
         .aspectRatio(1f)
         .fillMaxSize()
         .onGloballyPositioned {
             height = it.size.height
             width = it.size.width
-        }) {
-
-
-
-        Canvas(
-            modifier =
-            Modifier
-                .fillMaxSize(), onDraw = {
-                withTransform({
-                    rotate(
-                        currentAngle.toFloat(),
-                        Offset(
-                            (wheelDiameter / 2).toFloat() - wheelXOutOfBounds.value,
-                            wheelYOutOfBounds.value + (wheelDiameter / 2)
-                                .toFloat()
-                        )
-                    )
-                }) {
-                    drawImage(
-                        image = wheelDrawable.value,
-                        topLeft = Offset(-wheelXOutOfBounds.value, wheelYOutOfBounds.value)
+        }
+        .drawBehind {
+            rotate(
+                angle,
+                Offset(
+                    wheelOffsetX,
+                    wheelOffsetY
+                )
+            ) {
+                drawImage(
+                    image = wheelDrawable.value,
+                    topLeft = Offset(-wheelXOutOfBounds.value, wheelYOutOfBounds.value)
+                )
+            }
+        }
+    ) {
+        Box(
+            modifier = Modifier
+                .onGloballyPositioned {
+                    buttonHeight = it.size.height
+                    buttonWidth = it.size.width
+                }
+                .offset(x = buttonX.value, y = buttonY.value)
+        ) {
+            AnimatedVisibility(
+                visible = spinConfig is SpinConfig.Spin && !(wheelSpun || animationRunning),
+                exit = shrinkOut(
+                    shrinkTowards = Alignment.Center
+                )
+            ) {
+                Button(
+                    modifier = Modifier.defaultMinSize(minWidth = 148.dp),
+                    onClick = {
+                        animationRunning = true
+                    }
+                ) {
+                    Text(
+                        "Spin!",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
-            }
-        )
-
-        Box(
-            modifier = Modifier.onGloballyPositioned {
-                buttonHeight = it.size.height
-                buttonWidth = it.size.width
-            }.offset(x = buttonX, y = buttonY)
-        ) {
-            Button(onClick = { /*TODO*/ }) {
-                Text("Spin!")
             }
         }
     }
 }
+
 
 private fun getWheelDrawable(
     wheelRadius: Int,
@@ -156,6 +271,7 @@ private fun getWheelDrawable(
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = Typeface.DEFAULT_BOLD
     }
+
     val circleDiameter = wheelRadius * 2
     val numberSlices = wheelItems.size
     val sliceAngle = 360f / numberSlices
@@ -184,7 +300,7 @@ private fun getWheelDrawable(
             if (marginSize != null) {
                 val xPos = (circleDiameter / 2f) + centerRadius + marginSize
                 val yPos = (circleDiameter / 2 - (paint.descent() + paint.ascent()) / 2)
-                drawText(wheelItem.text.uppercase(Locale.getDefault()), xPos, yPos, paint)
+                drawText(wheelItem.text, xPos, yPos, paint)
             }
         }
     }
@@ -232,3 +348,15 @@ val Int.dpViewSystem: Int
         Resources.getSystem().displayMetrics
     ).roundToInt()
 
+sealed class SpinConfig(
+    open val selectedIndex: Int,
+    open val duration: Long
+) {
+    data class SpinComplete(
+        override val selectedIndex: Int,
+    ) : SpinConfig(selectedIndex, duration = 0L)
+
+    data class Spin(
+        override val selectedIndex: Int,
+    ) : SpinConfig(selectedIndex, duration = SPIN_DURATION)
+}

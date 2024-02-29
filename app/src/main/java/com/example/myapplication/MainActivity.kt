@@ -57,17 +57,23 @@ class MainActivity : ComponentActivity() {
                                 text = "5",
                                 color = androidx.compose.ui.graphics.Color.Red.toArgb()
                             ), WheelItem(
-                                text = "6",
+                                text = "Spin!",
                                 color = androidx.compose.ui.graphics.Color.Yellow.toArgb()
                             ), WheelItem(
                                 text = "7",
                                 color = androidx.compose.ui.graphics.Color.Gray.toArgb()
                             ), WheelItem(
-                                text = "8",
+                                text = "Spin!",
                                 color = androidx.compose.ui.graphics.Color.DarkGray.toArgb()
                             )
+                        ),
+                        spinConfig = SpinConfig.Spin(
+                            selectedIndex = 1
+                        ),
+                        onSpinComplete = {
+                                println("Spun to index")
+                            }
                         )
-                    )
                 }
             }
         }
